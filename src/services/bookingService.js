@@ -1,17 +1,36 @@
 const { supabase } = require('../config/supabaseClient');
 const axios = require('axios');
 
-// Booking intent detection patterns
+// ============================================
+// BOOKING PATTERNS - ENHANCED
+// ============================================
 const BOOKING_PATTERNS = {
   service: {
     limpieza: /limpi(eza|ar|o)|aseo|hogar/i,
-    mascotas: /mascot|perr|gat|pet|paseo/i,
-    unas: /uña|manicur|pedicur|acril/i,
-    barberia: /barb|cort|afeit|pelo|cabello/i
+    mascotas: /mascot|perr|gat|pet|paseo|peluquer[ií]a.*mascot/i,
+    unas: /u[ñn]a|manicur|pedicur|acr[ií]l|semipermanente/i,
+    barberia: /barb|cort.*pelo|cort.*cabello|afeit/i
   },
-  date: /hoy|mañana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d{1,2}[\/\-]\d{1,2}/i,
+  // Subtypes for limpieza
+  limpiezaSubtype: {
+    basica: /b[aá]sica|4\s*h(ora)?s?/i,
+    general: /general|7\s*h(ora)?s?/i,
+    profunda: /profunda|8\s*h(ora)?s?/i,
+    full: /full|completa|9\s*h(ora)?s?/i
+  },
+  date: /hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|\d{1,2}[\/-]\d{1,2}/i,
   time: /\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|mañana|tarde|noche/i,
-  zone: /zona|barrio|sector|cerca|ubicad|direcci/i
+  address: /calle|carrera|avenida|cra|cl|av|diagonal|transversal/i,
+  city: /bogot[aá]|medell[ií]n|cali|barranquilla|cartagena|bucaramanga|pereira|rionegro|la ceja/i,
+  payment: /efectivo|tarjeta|transferencia|pse|nequi|bancolombia|d[eé]bito|cr[eé]dito/i
+};
+
+// Limpieza prices
+const LIMPIEZA_PRICES = {
+  basica: 77000,
+  general: 107000,
+  profunda: 122000,
+  full: 137000
 };
 
 /**
@@ -22,12 +41,24 @@ const BOOKING_PATTERNS = {
  */
 function extractBookingData(message, currentData = {}) {
   const data = { ...currentData };
+  const messageLower = message.toLowerCase();
 
   // Detect service type
   for (const [service, pattern] of Object.entries(BOOKING_PATTERNS.service)) {
     if (pattern.test(message)) {
       data.service_type = service;
       break;
+    }
+  }
+
+  // Detect limpieza subtype
+  if (data.service_type === 'limpieza') {
+    for (const [subtype, pattern] of Object.entries(BOOKING_PATTERNS.limpiezaSubtype)) {
+      if (pattern.test(message)) {
+        data.service_subtype = subtype;
+        data.service_price = LIMPIEZA_PRICES[subtype];
+        break;
+      }
     }
   }
 
@@ -44,6 +75,28 @@ function extractBookingData(message, currentData = {}) {
     const timeMatch = message.match(BOOKING_PATTERNS.time);
     if (timeMatch) {
       data.requested_time = timeMatch[0];
+    }
+  }
+
+  // Detect city
+  if (BOOKING_PATTERNS.city.test(message)) {
+    const cityMatch = message.match(BOOKING_PATTERNS.city);
+    if (cityMatch) {
+      data.city = cityMatch[0];
+    }
+  }
+
+  // Detect address
+  if (BOOKING_PATTERNS.address.test(message)) {
+    // Store the full message as potential address if it contains address keywords
+    data.address_raw = message;
+  }
+
+  // Detect payment method
+  if (BOOKING_PATTERNS.payment.test(message)) {
+    const paymentMatch = message.match(BOOKING_PATTERNS.payment);
+    if (paymentMatch) {
+      data.payment_method = paymentMatch[0];
     }
   }
 
@@ -80,9 +133,19 @@ function parseDateExpression(expr) {
 
 /**
  * Check if we have enough data to create a booking
+ * For OMMEO: service + date + address is minimum
  */
 function isBookingComplete(data) {
-  return data.service_type && data.requested_date;
+  const hasService = data.service_type;
+  const hasDate = data.requested_date;
+  const hasAddress = data.address_raw || data.city;
+  
+  // For limpieza, also need subtype
+  if (data.service_type === 'limpieza' && !data.service_subtype) {
+    return false;
+  }
+  
+  return hasService && hasDate && hasAddress;
 }
 
 /**
@@ -90,9 +153,17 @@ function isBookingComplete(data) {
  */
 function getMissingFields(data) {
   const missing = [];
-  if (!data.service_type) missing.push('servicio');
+  
+  if (!data.service_type) {
+    missing.push('servicio');
+  } else if (data.service_type === 'limpieza' && !data.service_subtype) {
+    missing.push('tipo de limpieza (Básica/General/Profunda/Full)');
+  }
+  
   if (!data.requested_date) missing.push('fecha');
-  if (!data.zone) missing.push('zona/barrio');
+  if (!data.requested_time) missing.push('hora');
+  if (!data.address_raw && !data.city) missing.push('dirección completa');
+  
   return missing;
 }
 
@@ -111,9 +182,13 @@ async function createBooking(phoneNumber, bookingData) {
       .insert({
         phone_number: phoneNumber,
         service_type: bookingData.service_type,
+        service_subtype: bookingData.service_subtype,
+        service_price: bookingData.service_price,
         requested_date: bookingData.requested_date,
         requested_time: bookingData.requested_time,
-        zone: bookingData.zone,
+        city: bookingData.city,
+        address: bookingData.address_raw,
+        payment_method: bookingData.payment_method,
         notes: bookingData.notes,
         status: 'pending'
       })
@@ -162,11 +237,24 @@ async function notifyAdminPanel(booking) {
 function getBookingPrompt(bookingData) {
   const missing = getMissingFields(bookingData);
   
+  if (Object.keys(bookingData).length === 0) {
+    return '[BOOKING_START] El cliente aún no ha indicado qué servicio necesita.';
+  }
+  
   if (missing.length === 0) {
-    return `[BOOKING_READY] El cliente ya proporcionó todos los datos. Servicio: ${bookingData.service_type}, Fecha: ${bookingData.requested_date}, Zona: ${bookingData.zone || 'pendiente'}. Confirma y di que los pasarás con una asesora.`;
+    return `[BOOKING_READY] ¡Tengo todos los datos! 
+Servicio: ${bookingData.service_type}${bookingData.service_subtype ? ` (${bookingData.service_subtype})` : ''}
+Fecha: ${bookingData.requested_date}
+Hora: ${bookingData.requested_time || 'pendiente'}
+Dirección: ${bookingData.address_raw || bookingData.city}
+Pago: ${bookingData.payment_method || 'pendiente'}
+
+Confirma y PASA A UN AGENTE para finalizar.`;
   }
 
-  return `[BOOKING_PROGRESS] Datos capturados: ${JSON.stringify(bookingData)}. Falta: ${missing.join(', ')}. Pregunta por lo que falta de forma natural.`;
+  return `[BOOKING_PROGRESS] Datos capturados: ${JSON.stringify(bookingData)}.
+Falta preguntar: ${missing.join(', ')}.
+Pregunta por lo que falta de forma natural (UNA pregunta a la vez).`;
 }
 
 module.exports = {

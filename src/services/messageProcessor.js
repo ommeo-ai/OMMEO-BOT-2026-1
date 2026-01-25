@@ -1,32 +1,8 @@
 // ============================================
-// SYSTEM PROMPT - CEREBRO ENTERPRISE
+// MESSAGE PROCESSOR - OMMEO PROFESSIONAL
 // ============================================
-const SYSTEM_PROMPT_TEXT = `
-INSTRUCCIONES MAESTRAS:
-Eres **Miguel**, Coordinador Senior de Experiencia al Cliente en **OMMEO** (Colombia).
-Tu misión es **agendar servicios** de forma cálida y eficiente.
-
-TUS SERVICIOS:
-1. 🏠 Limpieza (profunda, regular, post-obra)
-2. 🐶 Mascotas (paseo, guardería, baño)
-3. 💅 Uñas (manicure, pedicure, acrílicas)
-4. 💈 Barbería (corte, barba, afeitado)
-
-PERSONALIDAD OBLIGATORIA:
-- Tono: Profesional, "paisa" suave, muy amable.
-- Emoji: Usa 🧡 una vez por respuesta.
-- Longitud: MÁXIMO 2-3 frases. Al grano.
-
-REGLAS DE NEGOCIO:
-- Flow: Servicio -> Fecha/Hora -> Zona -> Confirmación.
-- Precios: "El valor depende del servicio exacto 🧡 Cuéntame qué necesitas y te cotizo."
-- Pagos: Al final del servicio.
-- Seguridad: Profesionales verificados, con antecedentes.
-
-EJEMPLO DE RESPUESTA IDEAL:
-Usuario: "Quiero aseo"
-Miguel: "¡Claro que sí! 🧡 ¿Para qué día necesitas el servicio de limpieza y en qué barrio estás?"
-`;
+// Version 2.0 - Knowledge Base Integration
+// Last updated: 2026-01-25
 
 const { model, fallbackModel } = require('../config/geminiClient');
 const { supabase } = require('../config/supabaseClient');
@@ -34,7 +10,93 @@ const axios = require('axios');
 const { searchKnowledge } = require('./ragService');
 const { extractBookingData, isBookingComplete, createBooking, getBookingPrompt } = require('./bookingService');
 const { shouldHandoff, createHandoff, getHandoffMessage } = require('./handoffService');
-const { EVENTS, SCORE_DELTAS, trackEvent, updateLeadScore } = require('./analyticsService');
+const { EVENTS, trackEvent } = require('./analyticsService');
+const { detectIntent, isBookingFlowMessage } = require('./intentService');
+const { EXACT_RESPONSES, POLICIES, FLOWS } = require('../data/knowledgeBase');
+
+// ============================================
+// SYSTEM PROMPT - MIGUEL PROFESIONAL
+// ============================================
+const SYSTEM_PROMPT = `
+# ROL
+Eres **Miguel**, asistente virtual de **OMMEO** (Colombia). Tu tono es cordial, empático, profesional y natural — como quien ayuda con gusto y paciencia. Usas "🧡" una vez por respuesta.
+
+# MISIÓN
+1. Detectar categoría del servicio
+2. Enviar MENSAJES OFICIALES literalmente (sin recortes ni modificaciones)
+3. Capturar datos esenciales para agendar
+4. Escalar al agente humano cuando corresponda
+
+# PERSONALIDAD
+- Colombiano, nacido en Medellín, tono "paisa" suave
+- Mensajes cortos (2-3 frases máximo), al grano
+- Usa saludos simples: "¡Hola! 😊", "Claro que sí", "Con gusto te ayudo"
+- Evita tecnicismos y respuestas frías
+- NO seas insistente ni repitas preguntas si el cliente no responde
+- Emojis con moderación (1-3 por mensaje)
+- Corazones siempre naranjas 🧡
+
+# CATEGORÍAS DE SERVICIO
+1. 🏠 Limpieza (Básica $77k, General $107k, Profunda $122k, Full $137k)
+2. 🐶 Mascotas (Baño y corte desde $50k)
+3. 💅 Uñas (NO des precios, pasa a agente)
+4. 💈 Barbería (Desde $35k con domicilio)
+
+# FLUJOS DE AGENDAMIENTO
+
+## LIMPIEZA:
+1. Enviar mensaje oficial con precios
+2. Esperar que elija tipo (Básica/General/Profunda/Full)
+3. Preguntar fecha y hora
+4. Preguntar dirección completa (Ciudad, barrio, calle, edificio, apto)
+5. Preguntar método de pago
+6. Confirmar y pasar a agente
+
+## MASCOTAS:
+1. Preguntar raza de la mascota PRIMERO
+2. Dar precio "desde $50.000"
+3. Preguntar ubicación
+4. Preguntar fecha y hora
+5. Pasar a agente
+
+## UÑAS:
+1. Enviar bienvenida (sin precios)
+2. Si piden precio → PASAR A AGENTE
+3. Si piden fotos/portafolio → PASAR A AGENTE
+4. Pedir ubicación y diseño
+5. Preguntar fecha/hora
+6. Pasar a agente
+
+## BARBERÍA:
+1. Indicar "desde $35.000 con domicilio"
+2. Preguntar ubicación
+3. Preguntar fecha/hora
+4. Pasar a agente
+
+# REGLAS IMPORTANTES
+- NO resumas ni reescribas mensajes oficiales
+- NO inventes precios para uñas
+- NO des información incompleta
+- NO compartas números de proveedores
+- Precios de limpieza aplican hasta 120 m²
+- Servicios adicionales: $15.000/hora (lavado, planchado, paredes, juntas, comida)
+- Pagos: durante el servicio, nunca antes
+- Cobertura: Bogotá, Medellín, Cali, Barranquilla, Cartagena, Bucaramanga, Pereira
+- Horarios: L-S desde 8am, Domingos desde 9am
+- TODO ES A DOMICILIO
+- Las proveedoras llevan su alimentación
+
+# HANDOFF A AGENTE
+Pasar a agente humano cuando:
+- El cliente lo solicita explícitamente
+- Preguntan precio de UÑAS
+- Piden portafolio/fotos de uñas
+- Hay queja o reclamo
+- Tienes todos los datos del servicio listos
+
+Cuando pases a agente, di:
+"Estamos confirmando la disponibilidad del proveedor en tu dirección y fecha. Un agente te confirmará en breve 🧡"
+`;
 
 // In-memory fallback
 const memoryStore = new Map();
@@ -59,9 +121,47 @@ async function processIncomingMessage(payload) {
     // 1. Obtener contexto (Supabase o Memoria)
     let { history, metadata } = await getConversation(from);
     
-    // 2. Booking Intelligence Upgrade
+    // 2. INTENT DETECTION (NEW!)
+    const intent = detectIntent(messageBody);
+    console.log(`[Brain] 🎯 Intent: ${intent.intent} (${(intent.confidence * 100).toFixed(0)}%)`);
+
+    // 3. Check for direct handoff trigger
+    if (intent.triggerHandoff) {
+      console.log(`[Brain] 🔄 Handoff por intent: ${intent.reason}`);
+      await createHandoff(from, intent.reason, summarizeHistory(history), 'high');
+      const handoffMsg = intent.exactResponse || getHandoffMessage(intent.reason);
+      await sendWhatsAppMessage(phoneNumberId, from, handoffMsg);
+      trackEvent(EVENTS.HANDOFF_TRIGGERED, from, { reason: intent.reason }).catch(() => {});
+      return;
+    }
+
+    // 4. Check for exact response (send directly, skip AI)
+    if (intent.exactResponse && intent.confidence >= 0.85) {
+      console.log(`[Brain] 📋 Respuesta exacta para: ${intent.intent}`);
+      
+      // Save to history
+      const newHistory = [
+        ...history, 
+        { role: 'user', parts: [{ text: messageBody }] }, 
+        { role: 'model', parts: [{ text: intent.exactResponse }] }
+      ];
+      await saveConversation(from, newHistory, metadata);
+      await sendWhatsAppMessage(phoneNumberId, from, intent.exactResponse);
+      return;
+    }
+
+    // 5. Booking Intelligence
     const prevBookingData = metadata.bookingData || {};
     const extractedData = extractBookingData(messageBody, prevBookingData);
+    
+    // Merge with intent-detected service type
+    if (intent.serviceType) {
+      extractedData.service_type = intent.serviceType;
+    }
+    if (intent.subType) {
+      extractedData.service_subtype = intent.subType;
+    }
+    
     const bookingData = { ...prevBookingData, ...extractedData };
     
     // Save booking progress if updated
@@ -70,7 +170,7 @@ async function processIncomingMessage(payload) {
        trackEvent(EVENTS.BOOKING_STARTED, from, bookingData).catch(() => {});
     }
 
-    // 3. Human Handoff Check
+    // 6. Human Handoff Check (legacy - keep for explicit requests)
     const handoffCheck = shouldHandoff(messageBody, {
       confusionCount: metadata.confusionCount || 0,
       bookingComplete: isBookingComplete(bookingData)
@@ -83,17 +183,22 @@ async function processIncomingMessage(payload) {
       return;
     }
 
-    // 4. Auto-Booking Creation
+    // 7. Auto-Booking Creation (when all data is collected)
     if (isBookingComplete(bookingData) && !metadata.bookingCreated) {
       const booking = await createBooking(from, bookingData);
       if (booking) {
         metadata.bookingCreated = true;
         console.log(`[Brain] 📅 Booking guardado en DB: ${booking.id}`);
         trackEvent(EVENTS.BOOKING_CREATED, from, booking).catch(() => {});
+        
+        // Auto-handoff after booking is complete
+        await createHandoff(from, 'booking_confirmation', summarizeHistory(history), 'high');
+        await sendWhatsAppMessage(phoneNumberId, from, EXACT_RESPONSES.CONFIRMANDO_DISPONIBILIDAD);
+        return;
       }
     }
 
-    // 5. RAG Retrieval (Knowledge Base)
+    // 8. RAG Retrieval (Knowledge Base - for complex queries)
     let ragContext = '';
     try {
       ragContext = await searchKnowledge(messageBody);
@@ -102,12 +207,11 @@ async function processIncomingMessage(payload) {
       console.log('[Brain] RAG offline'); 
     }
 
-    // 6. Construcción del Cerebro (Context Injection)
-    // Inyectamos TODO el contexto en un solo turno para evitar corrupción de estado
+    // 9. Build AI Context
     const fullContextPrompt = `
-${SYSTEM_PROMPT_TEXT}
+${SYSTEM_PROMPT}
 
-INFORMACIÓN CLAVE (RAG) DE OMMEO:
+INFORMACIÓN ADICIONAL (RAG):
 ${ragContext || 'No hay info específica adicional.'}
 
 ESTADO DEL AGENDAMIENTO:
@@ -119,14 +223,14 @@ HISTORIAL DE CONVERSACIÓN:
 ${summarizeHistory(history)}
 
 CLIENTE DICE: "${messageBody}"
-RESPONDER COMO MIGUEL:
+RESPONDER COMO MIGUEL (máximo 2-3 frases):
 `;
 
     console.log('[Brain] 🤖 Pensando...');
     
     let responseText = '';
     
-    // INTENTO 1: Modelo Principal (Flash-001)
+    // PRIMARY: gemini-2.5-flash
     try {
       const result = await model.generateContent(fullContextPrompt);
       responseText = result.response.text();
@@ -134,7 +238,7 @@ RESPONDER COMO MIGUEL:
       console.warn(`[Brain] ⚠️ Primary model failed (${primaryError.message}). Switch to Fallback.`);
       trackEvent(EVENTS.ERROR, from, { error: 'primary_model_failed', details: primaryError.message }).catch(() => {});
       
-      // INTENTO 2: Modelo Fallback (Pro)
+      // FALLBACK: gemini-2.0-flash
       if (fallbackModel) {
         try {
           const resultMixin = await fallbackModel.generateContent(fullContextPrompt);
@@ -150,7 +254,7 @@ RESPONDER COMO MIGUEL:
 
     console.log(`[Brain] ✅ Respuesta (${Date.now() - startTime}ms): "${responseText.substring(0, 50)}..."`);
 
-    // 7. Guardar y Responder
+    // 10. Guardar y Responder
     const newHistory = [...history, { role: 'user', parts: [{ text: messageBody }] }, { role: 'model', parts: [{ text: responseText }] }];
     await saveConversation(from, newHistory, { ...metadata, bookingData });
     await sendWhatsAppMessage(phoneNumberId, from, responseText);
@@ -201,7 +305,7 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
 }
 
 async function sendFallbackMessage(phoneNumberId, to) {
-  await sendWhatsAppMessage(phoneNumberId, to, "¡Hola! 🧡 Soy Miguel. ¿Qué servicio te interesa? (Limpieza 🏠, Mascotas 🐶, Uñas 💅, Barbería 💈)");
+  await sendWhatsAppMessage(phoneNumberId, to, EXACT_RESPONSES.SALUDO_INICIAL);
 }
 
 module.exports = { processIncomingMessage };

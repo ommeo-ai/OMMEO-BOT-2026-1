@@ -1,16 +1,25 @@
 const { supabase } = require('../config/supabaseClient');
 const axios = require('axios');
 
-// Triggers for human handoff (REFINED - less aggressive)
+// ============================================
+// HANDOFF TRIGGERS - REFINED FOR OMMEO
+// ============================================
+// Key change: Removed generic pricing trigger
+// Now only handoff for UÑAS pricing (handled by intentService)
 const HANDOFF_TRIGGERS = {
-  explicit: /quiero hablar con (?:una? )?(?:persona|humano|agente|asesora?)|ayuda real|alguien real|pasame con/i,
-  complaint: /queja formal|reclamo oficial|mal servicio|muy insatisf|problema grave|denuncia/i,
-  confusion: /no entiendo nada|no funciona para nada|muchos errores/i,
-  pricing: /cuanto (?:cuesta|vale|cobran)|precio (?:de|del|para)|cotiza(?:cion|me)|tarifa/i
+  // Explicit request for human agent
+  explicit: /quiero hablar con (?:una? )?(?:persona|humano|agente|asesora?)|ayuda real|alguien real|pasame con|p[aá]same con/i,
+  
+  // Complaints and issues
+  complaint: /queja formal|reclamo oficial|mal servicio|muy insatisf|problema grave|denuncia|estafa|robo|demanda/i,
+  
+  // Confusion (only after multiple attempts)
+  confusion: /no entiendo nada|no funciona para nada|muchos errores|no me ayuda/i
 };
 
 /**
  * Check if message triggers handoff
+ * NOTE: Pricing handoff for UÑAS is now handled by intentService
  */
 function shouldHandoff(message, conversationContext = {}) {
   // Explicit request for human
@@ -23,26 +32,19 @@ function shouldHandoff(message, conversationContext = {}) {
     return { trigger: true, reason: 'complaint', priority: 'urgent' };
   }
 
-  // Pricing question (always handoff to sales)
-  if (HANDOFF_TRIGGERS.pricing.test(message)) {
-    return { trigger: true, reason: 'pricing_inquiry', priority: 'medium' };
-  }
-
-  // Repeated confusion
+  // Repeated confusion (>= 2 confusing messages)
   if (conversationContext.confusionCount >= 2 && HANDOFF_TRIGGERS.confusion.test(message)) {
     return { trigger: true, reason: 'user_confusion', priority: 'medium' };
   }
 
-  // DISABLED: Auto-handoff interrupts Gemini response. Let AI confirm booking first.
-  // if (conversationContext.bookingComplete) {
-  //   return { trigger: true, reason: 'booking_confirmation', priority: 'high' };
-  // }
+  // NOTE: Booking complete handoff is now handled in messageProcessor.js
+  // after booking is saved to database
 
   return { trigger: false };
 }
 
 /**
- * Create handoff record and notify
+ * Create handoff record and notify admin
  */
 async function createHandoff(phoneNumber, reason, conversationSummary, priority = 'medium') {
   if (!supabase) {
@@ -111,11 +113,14 @@ async function notifyHandoff(handoff) {
  */
 function getHandoffMessage(reason) {
   const messages = {
-    user_request: '🧡 Perfecto, te paso con una asesora de OMMEO que te contactará en menos de 2 minutos.',
+    user_request: '🧡 Perfecto, te paso con una asesora de OMMEO que te contactará en breve.',
     complaint: '🧡 Lamento mucho lo que me cuentas. Te paso inmediatamente con un supervisor que te ayudará a resolver esto.',
-    pricing_inquiry: '🧡 Para darte el precio exacto, te paso con una asesora que te cotizará en segundos.',
     user_confusion: '🧡 Disculpa si no fui claro. Te paso con una asesora que te ayudará mejor.',
-    booking_confirmation: '🧡 ¡Excelente! Te paso con una asesora para confirmar todos los detalles y agendar tu servicio.'
+    booking_confirmation: '🧡 ¡Excelente! Estamos confirmando la disponibilidad del proveedor en tu dirección y fecha. Un agente te confirmará en breve.',
+    pricing_unas: '🧡 Para darte el precio exacto de tu servicio de uñas, te paso con una asesora que te cotizará en segundos.',
+    portfolio_unas: '🧡 Claro que sí, te contactaré con un agente para enviarte referentes en imagen del trabajo de nuestro proveedor.',
+    foto_recibida: '🧡 Gracias por la foto. Le enviaremos la imagen a nuestro proveedor para obtener el precio del servicio.',
+    cancelacion: '🧡 Entendido, procederé a contactar a un asesor para confirmar la cancelación.'
   };
 
   return messages[reason] || messages.user_request;
