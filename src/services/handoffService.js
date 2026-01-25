@@ -1,12 +1,12 @@
 const { supabase } = require('../config/supabaseClient');
 const axios = require('axios');
 
-// Triggers for human handoff
+// Triggers for human handoff (REFINED - less aggressive)
 const HANDOFF_TRIGGERS = {
-  explicit: /human|persona|agent|ayuda real|hablar con|alguien real/i,
-  complaint: /queja|reclamo|mal servicio|insatisf|problema serio|denuncia/i,
-  confusion: /no entiendo|no funciona|error|falla/i,
-  pricing: /precio|costo|cuanto|cotiza|valor/i
+  explicit: /quiero hablar con (?:una? )?(?:persona|humano|agente|asesora?)|ayuda real|alguien real|pasame con/i,
+  complaint: /queja formal|reclamo oficial|mal servicio|muy insatisf|problema grave|denuncia/i,
+  confusion: /no entiendo nada|no funciona para nada|muchos errores/i,
+  pricing: /cuanto (?:cuesta|vale|cobran)|precio (?:de|del|para)|cotiza(?:cion|me)|tarifa/i
 };
 
 /**
