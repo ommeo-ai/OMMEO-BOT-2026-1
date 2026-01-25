@@ -10,9 +10,9 @@ if (apiKey) {
   try {
     genAI = new GoogleGenerativeAI(apiKey);
     
-    // PRIMARY: gemini-1.5-flash (Stable with free tier quota)
+    // PRIMARY: gemini-2.5-flash (Standard for 2026)
     model = genAI.getGenerativeModel({ 
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash',
       generationConfig: {
         maxOutputTokens: 1024,
         temperature: 0.7,
@@ -20,16 +20,16 @@ if (apiKey) {
       }
     });
 
-    // FALLBACK: gemini-1.5-flash (Stable fallback)
+    // FALLBACK: gemini-2.0-flash (Stable fallback)
     fallbackModel = genAI.getGenerativeModel({ 
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.0-flash',
       generationConfig: {
         maxOutputTokens: 1024,
         temperature: 0.7,
       }
     });
     
-    console.log('✅ Gemini client initialized (Primary: 1.5-flash, Fallback: 1.5-flash)');
+    console.log('✅ Gemini client initialized (Primary: 2.5-flash, Fallback: 2.0-flash)');
   } catch (error) {
     console.error('❌ Gemini init failed:', error.message);
   }
