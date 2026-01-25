@@ -33,10 +33,10 @@ function shouldHandoff(message, conversationContext = {}) {
     return { trigger: true, reason: 'user_confusion', priority: 'medium' };
   }
 
-  // Booking complete - handoff to confirm
-  if (conversationContext.bookingComplete) {
-    return { trigger: true, reason: 'booking_confirmation', priority: 'high' };
-  }
+  // DISABLED: Auto-handoff interrupts Gemini response. Let AI confirm booking first.
+  // if (conversationContext.bookingComplete) {
+  //   return { trigger: true, reason: 'booking_confirmation', priority: 'high' };
+  // }
 
   return { trigger: false };
 }

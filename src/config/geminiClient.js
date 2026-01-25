@@ -10,9 +10,9 @@ if (apiKey) {
   try {
     genAI = new GoogleGenerativeAI(apiKey);
     
-    // PRIMARY: gemini-2.0-flash (Current default as of Jan 2025)
+    // PRIMARY: gemini-1.5-flash (Stable with free tier quota)
     model = genAI.getGenerativeModel({ 
-      model: 'gemini-2.0-flash',
+      model: 'gemini-1.5-flash',
       generationConfig: {
         maxOutputTokens: 1024,
         temperature: 0.7,
@@ -29,7 +29,7 @@ if (apiKey) {
       }
     });
     
-    console.log('✅ Gemini client initialized (Primary: 2.0-flash, Secondary: 1.5-flash)');
+    console.log('✅ Gemini client initialized (Primary: 1.5-flash, Fallback: 1.5-flash)');
   } catch (error) {
     console.error('❌ Gemini init failed:', error.message);
   }
