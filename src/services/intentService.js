@@ -10,10 +10,22 @@ const { EXACT_RESPONSES, FAQ, INTENT_PATTERNS } = require('../data/knowledgeBase
 /**
  * Detect the primary intent of a message
  * @param {string} message - User message
+ * @param {object} context - Conversation context (e.g., last_service_type)
  * @returns {object} - { intent, confidence, exactResponse }
  */
-function detectIntent(message) {
+function detectIntent(message, context = {}) {
   const msg = message.toLowerCase().trim();
+  
+  // 0. CONTEXTUAL OVERRIDES (High Priority)
+  // Fix for "profunda" -> Uñas vs Limpieza ambiguity
+  if (context.last_service_type === 'limpieza') {
+    if (INTENT_PATTERNS.LIMPIEZA_PROFUNDA.test(msg) || /\bprofunda\b/.test(msg)) {
+      return { intent: 'LIMPIEZA_PROFUNDA', confidence: 0.95, serviceType: 'limpieza', subType: 'profunda' };
+    }
+    if (INTENT_PATTERNS.LIMPIEZA_GENERAL.test(msg) || /\bgeneral\b/.test(msg)) {
+      return { intent: 'LIMPIEZA_GENERAL', confidence: 0.95, serviceType: 'limpieza', subType: 'general' };
+    }
+  }
   
   // Check for exact greeting
   if (INTENT_PATTERNS.SALUDO.test(msg)) {

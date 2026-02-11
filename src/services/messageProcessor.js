@@ -9,15 +9,39 @@ const { supabase } = require('../config/supabaseClient');
 const axios = require('axios');
 const { searchKnowledge } = require('./ragService');
 const { extractBookingData, isBookingComplete, createBooking, getBookingPrompt } = require('./bookingService');
-const { shouldHandoff, createHandoff, getHandoffMessage } = require('./handoffService');
+const { evaluateHandoff } = require('./handoffDecisionEngine');
+const { toContext } = require('./contextHelper');
 const { EVENTS, trackEvent } = require('./analyticsService');
 const { detectIntent, isBookingFlowMessage } = require('./intentService');
 const { EXACT_RESPONSES, POLICIES, FLOWS } = require('../data/knowledgeBase');
 
 // ============================================
-// SYSTEM PROMPT - MIGUEL PROFESIONAL
+// SYSTEM PROMPT - DYNAMIC CONTEXT LOADING
 // ============================================
+const fs = require('fs');
+const path = require('path');
+
+const loadMemoryContext = () => {
+    try {
+        const memoryDir = path.join(__dirname, '../../.ai/memory');
+        if (!fs.existsSync(memoryDir)) return '';
+        
+        const files = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md'));
+        return files.map(f => {
+            const content = fs.readFileSync(path.join(memoryDir, f), 'utf8');
+            return `--- CONTEXT: ${f} ---\n${content}`;
+        }).join('\n\n');
+    } catch (e) {
+        console.error('Error loading memory context:', e);
+        return '';
+    }
+};
+
+const MEMORY_CONTEXT = loadMemoryContext();
+
 const SYSTEM_PROMPT = `
+${MEMORY_CONTEXT}
+
 # ROL
 Eres **Miguel**, asistente virtual de **OMMEO** (Colombia). Tu tono es cordial, empático, profesional y natural — como quien ayuda con gusto y paciencia. Usas "🧡" una vez por respuesta.
 
@@ -35,6 +59,7 @@ Eres **Miguel**, asistente virtual de **OMMEO** (Colombia). Tu tono es cordial, 
 - NO seas insistente ni repitas preguntas si el cliente no responde
 - Emojis con moderación (1-3 por mensaje)
 - Corazones siempre naranjas 🧡
+
 
 # CATEGORÍAS DE SERVICIO
 1. 🏠 Limpieza (Básica $77k, General $107k, Profunda $122k, Full $137k)
@@ -125,15 +150,28 @@ async function processIncomingMessage(payload) {
     const intent = detectIntent(messageBody);
     console.log(`[Brain] 🎯 Intent: ${intent.intent} (${(intent.confidence * 100).toFixed(0)}%)`);
 
-    // 3. Check for direct handoff trigger
-    if (intent.triggerHandoff) {
-      console.log(`[Brain] 🔄 Handoff por intent: ${intent.reason}`);
-      await createHandoff(from, intent.reason, summarizeHistory(history), 'high');
-      const handoffMsg = intent.exactResponse || getHandoffMessage(intent.reason);
-      await sendWhatsAppMessage(phoneNumberId, from, handoffMsg);
-      trackEvent(EVENTS.HANDOFF_TRIGGERED, from, { reason: intent.reason }).catch(() => {});
-      return;
+    // 3. INTELLIGENT HANDOFF CHECK (v4.0)
+    // Replaces explicit checks with scoring engine
+    const handoffDecision = evaluateHandoff(messageBody, toContext(intent), {
+        consecutive_unknowns: 0, // TODO: Implement session tracking for this
+        last_intent: null,
+        repetition_count: 0
+    });
+
+    if (handoffDecision.shouldHandoff) {
+         console.log(`[Brain] 🛑 HANDOFF TRIGGERED. Score: ${handoffDecision.score}. Reasons: ${handoffDecision.reasons.join(',')}`);
+         
+         const reason = handoffDecision.reasons[0] || 'auto_score';
+         await createHandoff(from, reason, summarizeHistory(history), 'high');
+         
+         // Track event
+         trackEvent(EVENTS.HANDOFF_TRIGGERED, from, { reason, score: handoffDecision.score }).catch(() => {});
+         
+         await sendWhatsAppMessage(phoneNumberId, from, handoffDecision.handOffMessage);
+         return;
     }
+    
+
 
     // 4. Check for exact response (send directly, skip AI)
     if (intent.exactResponse && intent.confidence >= 0.85) {

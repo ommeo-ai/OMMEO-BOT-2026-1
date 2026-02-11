@@ -569,7 +569,7 @@ const FLOWS = {
   limpieza: {
     order: ['service_subtype', 'date_time', 'address', 'payment_method'],
     questions: {
-      service_subtype: '¿Cual de nuestros servicios te gustaría agendar? ✨',
+      ASK_SERVICE_TYPE: "¿Cuál de nuestros servicios te gustaría agendar? ✨",
       date_time: '¿Para qué fecha y hora necesitas el servicio? 📅',
       address: 'Perfecto, ¿cuál es la dirección completa del servicio? (Ciudad, barrio, dirección, nombre del edificio y número de apartamento)',
       payment_method: `¿Qué método de pago prefieres? Tenemos disponibles:

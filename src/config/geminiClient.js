@@ -14,7 +14,7 @@ if (apiKey) {
     model = genAI.getGenerativeModel({ 
       model: 'gemini-2.5-flash',
       generationConfig: {
-        maxOutputTokens: 1024,
+        maxOutputTokens: 2048,
         temperature: 0.7,
         topP: 0.9,
       }
@@ -24,7 +24,7 @@ if (apiKey) {
     fallbackModel = genAI.getGenerativeModel({ 
       model: 'gemini-2.0-flash',
       generationConfig: {
-        maxOutputTokens: 1024,
+        maxOutputTokens: 2048,
         temperature: 0.7,
       }
     });
@@ -37,5 +37,5 @@ if (apiKey) {
   console.error('❌ GEMINI_API_KEY missing');
 }
 
-module.exports = { model, fallbackModel };
+module.exports = { model, fallbackModel, genAI };
 

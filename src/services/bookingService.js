@@ -1,5 +1,6 @@
 const { supabase } = require('../config/supabaseClient');
 const axios = require('axios');
+const { parseTemporalExpression } = require('./temporalNLU');
 
 // ============================================
 // BOOKING PATTERNS - ENHANCED
@@ -62,16 +63,25 @@ function extractBookingData(message, currentData = {}) {
     }
   }
 
-  // Detect date
-  if (BOOKING_PATTERNS.date.test(message)) {
+  // Detect date/time via Temporal NLU
+  const temporal = parseTemporalExpression(message);
+  if (temporal && temporal.date) {
+    data.requested_date = temporal.date;
+    if (temporal.time) {
+      data.requested_time = temporal.time;
+    }
+  }
+
+  // Fallback: Detect date via Regex (if NLU missed it, though NLU covers regex logic)
+  if (!data.requested_date && BOOKING_PATTERNS.date.test(message)) {
     const dateMatch = message.match(BOOKING_PATTERNS.date);
     if (dateMatch) {
       data.requested_date = parseDateExpression(dateMatch[0]);
     }
   }
 
-  // Detect time
-  if (BOOKING_PATTERNS.time.test(message)) {
+  // Detect time (only if not already set by NLU)
+  if (!data.requested_time && BOOKING_PATTERNS.time.test(message)) {
     const timeMatch = message.match(BOOKING_PATTERNS.time);
     if (timeMatch) {
       data.requested_time = timeMatch[0];
@@ -242,14 +252,19 @@ function getBookingPrompt(bookingData) {
   }
   
   if (missing.length === 0) {
-    return `[BOOKING_READY] ¡Tengo todos los datos! 
-Servicio: ${bookingData.service_type}${bookingData.service_subtype ? ` (${bookingData.service_subtype})` : ''}
-Fecha: ${bookingData.requested_date}
-Hora: ${bookingData.requested_time || 'pendiente'}
-Dirección: ${bookingData.address_raw || bookingData.city}
-Pago: ${bookingData.payment_method || 'pendiente'}
+    return `[BOOKING_READY] ¡Tengo todos los datos!
+Genera un MENSAJE DE CONFIRMACIÓN con este formato exacto:
 
-Confirma y PASA A UN AGENTE para finalizar.`;
+"¡Perfecto! 🧡 Tenemos todo listo para tu servicio.
+📝 *Resumen de tu solicitud:*
+
+✨ *Servicio:* ${bookingData.service_type}${bookingData.service_subtype ? ` (${bookingData.service_subtype})` : ''}
+📅 *Fecha:* ${bookingData.requested_date}
+⏰ *Hora:* ${bookingData.requested_time || 'A coordinar'}
+📍 *Ubicación:* ${bookingData.address_raw || bookingData.city}
+💳 *Pago:* ${bookingData.payment_method || 'A coordinar'}
+
+Un agente humano validará la disponibilidad y te escribirá en breve para confirmar. ⏳"`;
   }
 
   return `[BOOKING_PROGRESS] Datos capturados: ${JSON.stringify(bookingData)}.
